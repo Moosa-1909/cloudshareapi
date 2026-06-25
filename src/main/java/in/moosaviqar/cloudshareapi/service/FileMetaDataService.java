@@ -18,6 +18,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -36,7 +37,7 @@ public class FileMetaDataService {
         Files.createDirectories(uploadPath);
 
         for(MultipartFile file : files){
-            String filename = UUID.randomUUID()+"."+StringUtils.getFilename(file.getOriginalFilename());
+            String filename = UUID.randomUUID()+"."+StringUtils.getFilenameExtension(file.getOriginalFilename());
             Path targetLocation = uploadPath.resolve(filename);
             Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
 
@@ -67,5 +68,50 @@ public class FileMetaDataService {
                 .isPublic(fileMetaDataDocument.getIsPublic())
                 .uploadedAt(fileMetaDataDocument.getUploadedAt())
                 .build();
+    }
+    public List<FileMetaDataDTO> getFiles(){
+        ProfileDocument currentProfile = profileService.getCurrentProfile();
+        List<FileMetaDataDocument> files = fileMetaDataRepository.findByClerkId(currentProfile.getClerkId());
+        return files.stream().map(this::mapToDTO).collect(Collectors.toList());
+    }
+    public FileMetaDataDTO getPublicFile(String id){
+        Optional<FileMetaDataDocument> fileOptional = fileMetaDataRepository.findById(id);
+        if (fileOptional.isEmpty() || !fileOptional.get().getIsPublic()) {
+            throw new RuntimeException("Unable to get file");
+
+        }
+        FileMetaDataDocument document = fileOptional.get();
+        return mapToDTO(document);
+    }
+    public FileMetaDataDTO getDownloadableFile(String  id){
+        FileMetaDataDocument file = fileMetaDataRepository.findById(id).orElseThrow(() -> new RuntimeException("file not found"));
+        return mapToDTO(file);
+
+    }
+    public void deleteFile(String id) {
+        try {
+            ProfileDocument currentProfile = profileService.getCurrentProfile();
+            FileMetaDataDocument file = fileMetaDataRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("File not found"));
+
+            if (!file.getClerkId().equals(currentProfile.getClerkId())) {
+                throw new RuntimeException("File is not belong to current user");
+            }
+
+            Path filePath = Paths.get(file.getFileLocation());
+            Files.deleteIfExists(filePath);
+
+            fileMetaDataRepository.deleteById(id);
+        }catch (Exception e) {
+            throw new RuntimeException("Error deleting the file");
+        }
+    }
+    public FileMetaDataDTO togglePublic(String id) {
+        FileMetaDataDocument file = fileMetaDataRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("File not found"));
+
+        file.setIsPublic(!file.getIsPublic());
+        fileMetaDataRepository.save(file);
+        return mapToDTO(file);
     }
 }
