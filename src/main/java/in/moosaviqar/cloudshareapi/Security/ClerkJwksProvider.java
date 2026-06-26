@@ -25,20 +25,25 @@ public class ClerkJwksProvider {
     private static final long CACHE_TTL = 3600000;
 
     public PublicKey getPublicKey(String kid) throws Exception {
-        if (keyCache.containsKey(kid) && System.currentTimeMillis() - lastFetchTime < CACHE_TTL) {
-            return keyCache.get(kid);
+        if (!keyCache.containsKey(kid) || System.currentTimeMillis() - lastFetchTime >= CACHE_TTL) {
+            refreshKeys();
         }
-        refreshKeys();
+
+        if (!keyCache.containsKey(kid)) {
+            keyCache.clear();
+            refreshKeys();
+        }
+
         return keyCache.get(kid);
     }
 
     private void refreshKeys() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode jwks = mapper.readTree(new URL(jwksUrl).openStream());
-        JsonNode keys = jwks.get("keys");   // ✅ was "key"
+        JsonNode keys = jwks.get("keys");
 
         for (JsonNode keyNode : keys) {
-            String kid = keyNode.get("kid").asText();   // ✅ was "Kid"
+            String kid = keyNode.get("kid").asText();
             String kty = keyNode.get("kty").asText();
             String alg = keyNode.get("alg").asText();
 
@@ -49,7 +54,7 @@ public class ClerkJwksProvider {
                 keyCache.put(kid, publicKey);
             }
         }
-        lastFetchTime = System.currentTimeMillis();   // ✅ outside the loop
+        lastFetchTime = System.currentTimeMillis();
     }
 
     private PublicKey createPublicKey(String modulus, String exponent) throws Exception {

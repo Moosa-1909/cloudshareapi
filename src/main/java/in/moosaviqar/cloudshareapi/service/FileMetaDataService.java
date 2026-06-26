@@ -1,23 +1,19 @@
 package in.moosaviqar.cloudshareapi.service;
 
-
+import com.cloudinary.Cloudinary;
 import in.moosaviqar.cloudshareapi.document.FileMetaDataDocument;
 import in.moosaviqar.cloudshareapi.document.ProfileDocument;
 import in.moosaviqar.cloudshareapi.dto.FileMetaDataDTO;
 import in.moosaviqar.cloudshareapi.repository.FileMetaDataRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -27,22 +23,26 @@ import java.util.stream.Collectors;
 public class FileMetaDataService {
     private final ProfileService profileService;
     private final FileMetaDataRepository fileMetaDataRepository;
+    private final Cloudinary cloudinary;
 
-    public List<FileMetaDataDTO> uploadFiles(MultipartFile files[]) throws IOException {
-       ProfileDocument currentProfile = profileService.getCurrentProfile();
-       List<FileMetaDataDocument> savedFiles = new ArrayList<>();
+    public List<FileMetaDataDTO> uploadFiles(MultipartFile[] files) throws IOException {
+        ProfileDocument currentProfile = profileService.getCurrentProfile();
+        List<FileMetaDataDocument> savedFiles = new ArrayList<>();
 
-       //yaha upload path aata
-        Path uploadPath = Paths.get("upload").toAbsolutePath().normalize();
-        Files.createDirectories(uploadPath);
+        for (MultipartFile file : files) {
+            Map uploadResult = cloudinary.uploader().upload(
+                    file.getBytes(),
+                    Map.of(
+                            "resource_type", "auto",
+                            "public_id", UUID.randomUUID().toString()
+                    )
+            );
 
-        for(MultipartFile file : files){
-            String filename = UUID.randomUUID()+"."+StringUtils.getFilenameExtension(file.getOriginalFilename());
-            Path targetLocation = uploadPath.resolve(filename);
-            Files.copy(file.getInputStream(), targetLocation, StandardCopyOption.REPLACE_EXISTING);
+            String fileUrl = (String) uploadResult.get("secure_url");
+            String publicId = (String) uploadResult.get("public_id");
 
             FileMetaDataDocument fileMetaData = FileMetaDataDocument.builder()
-                    .fileLocation(targetLocation.toString())
+                    .fileLocation(fileUrl)
                     .name(file.getOriginalFilename())
                     .size(file.getSize())
                     .type(file.getContentType())
@@ -53,8 +53,7 @@ public class FileMetaDataService {
 
             savedFiles.add(fileMetaDataRepository.save(fileMetaData));
         }
-            return savedFiles.stream().map(fileMetaDataDocument -> mapToDTO(fileMetaDataDocument))
-            .collect(Collectors.toList());
+        return savedFiles.stream().map(this::mapToDTO).collect(Collectors.toList());
     }
 
     private FileMetaDataDTO mapToDTO(FileMetaDataDocument fileMetaDataDocument) {
@@ -69,25 +68,27 @@ public class FileMetaDataService {
                 .uploadedAt(fileMetaDataDocument.getUploadedAt())
                 .build();
     }
-    public List<FileMetaDataDTO> getFiles(){
+
+    public List<FileMetaDataDTO> getFiles() {
         ProfileDocument currentProfile = profileService.getCurrentProfile();
         List<FileMetaDataDocument> files = fileMetaDataRepository.findByClerkId(currentProfile.getClerkId());
         return files.stream().map(this::mapToDTO).collect(Collectors.toList());
     }
-    public FileMetaDataDTO getPublicFile(String id){
+
+    public FileMetaDataDTO getPublicFile(String id) {
         Optional<FileMetaDataDocument> fileOptional = fileMetaDataRepository.findById(id);
         if (fileOptional.isEmpty() || !fileOptional.get().getIsPublic()) {
             throw new RuntimeException("Unable to get file");
-
         }
-        FileMetaDataDocument document = fileOptional.get();
-        return mapToDTO(document);
+        return mapToDTO(fileOptional.get());
     }
-    public FileMetaDataDTO getDownloadableFile(String  id){
-        FileMetaDataDocument file = fileMetaDataRepository.findById(id).orElseThrow(() -> new RuntimeException("file not found"));
-        return mapToDTO(file);
 
+    public FileMetaDataDTO getDownloadableFile(String id) {
+        FileMetaDataDocument file = fileMetaDataRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("file not found"));
+        return mapToDTO(file);
     }
+
     public void deleteFile(String id) {
         try {
             ProfileDocument currentProfile = profileService.getCurrentProfile();
@@ -95,21 +96,22 @@ public class FileMetaDataService {
                     .orElseThrow(() -> new RuntimeException("File not found"));
 
             if (!file.getClerkId().equals(currentProfile.getClerkId())) {
-                throw new RuntimeException("File is not belong to current user");
+                throw new RuntimeException("File does not belong to current user");
             }
 
-            Path filePath = Paths.get(file.getFileLocation());
-            Files.deleteIfExists(filePath);
+            String fileUrl = file.getFileLocation();
+            String publicId = fileUrl.substring(fileUrl.lastIndexOf("/") + 1, fileUrl.lastIndexOf("."));
+            cloudinary.uploader().destroy(publicId, Map.of("resource_type", "raw"));
 
             fileMetaDataRepository.deleteById(id);
-        }catch (Exception e) {
+        } catch (Exception e) {
             throw new RuntimeException("Error deleting the file");
         }
     }
+
     public FileMetaDataDTO togglePublic(String id) {
         FileMetaDataDocument file = fileMetaDataRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("File not found"));
-
         file.setIsPublic(!file.getIsPublic());
         fileMetaDataRepository.save(file);
         return mapToDTO(file);
